@@ -204,16 +204,98 @@ def train(model):
     dataset_val.load_myapp(args.dataset, "val")
     dataset_val.prepare()
 
+    # Image Augmentation
+    sometimes = lambda aug: iaa.Sometimes(0.5, aug)
+    augmentation = iaa.Sequential(
+        [
+            iaa.Fliplr(0.5),
+            iaa.Flipud(0.2),
+            sometimes(iaa.Crop(percent=(0, 0.1))),
+            sometimes(iaa.Affine(
+                scale={"x": (0.8, 1.2), "y": (0.8, 1.2)},
+                translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
+                rotate=(-45, 45),
+                shear=(-16, 16),
+                order=[0, 1],
+                cval=(0, 255),
+                mode=ia.ALL
+            )),
+            iaa.SomeOf((0, 5),
+                [
+                    sometimes(
+                        iaa.Superpixels(
+                            p_replace=(0, 1.0),
+                            n_segments=(20, 200)
+                        )
+                    ),
+                    iaa.OneOf([
+                        iaa.GaussianBlur((0, 3.0)),
+                        iaa.AverageBlur(k=(2, 7)),
+                        iaa.MedianBlur(k=(3, 11)),
+                    ]),
+                    iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5)),
+                    iaa.Emboss(alpha=(0, 1.0), strength=(0, 2.0)),
+                    sometimes(iaa.OneOf([
+                        iaa.EdgeDetect(alpha=(0, 0.7)),
+                        iaa.DirectedEdgeDetect(
+                            alpha=(0, 0.7), direction=(0.0, 1.0)
+                        ),
+                    ])),
+                    iaa.AdditiveGaussianNoise(
+                        loc=0, scale=(0.0, 0.05*255), per_channel=0.5
+                    ),
+                    iaa.OneOf([
+                        iaa.Dropout((0.01, 0.1), per_channel=0.5),
+                        iaa.CoarseDropout(
+                            (0.03, 0.15), size_percent=(0.02, 0.05),
+                            per_channel=0.2
+                        ),
+                    ]),
+                    iaa.Invert(0.05, per_channel=True),
+                    iaa.Add((-10, 10), per_channel=0.5),
+                    iaa.Multiply((0.5, 1.5), per_channel=0.5),
+                    #iaa.LinearContrast((0.5, 2.0), per_channel=0.5),
+                    iaa.Grayscale(alpha=(0.0, 1.0)),
+                    sometimes(
+                        iaa.ElasticTransformation(alpha=(0.5, 3.5), sigma=0.25)
+                    ),
+                    sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05)))
+                ],
+                random_order=True
+            )
+        ],
+        random_order=True
+    )
+
     # *** This training schedule is an example. Update to your needs ***
     # Since we're using a very small dataset, and starting from
     # COCO trained weights, we don't need to train too long. Also,
     # no need to train all layers, just the heads should do it.
+    # Training - Stage 1
     print("Training network heads")
     model.train(dataset_train, dataset_val,
                 learning_rate=config.LEARNING_RATE,
-                epochs=30,
-                layers='heads')
+                epochs=40,
+                layers='heads',
+                augmentation=augmentation)
 
+    # Training - Stage 2
+    # Finetune layers from ResNet stage 4 and up
+    print("Fine tune Resnet stage 4 and up")
+    model.train(dataset_train, dataset_val,
+                learning_rate=config.LEARNING_RATE,
+                epochs=120,
+                layers='4+',
+                augmentation=augmentation)
+
+    # Training - Stage 3
+    # Fine tune all layers
+    print("Fine tune all layers")
+    model.train(dataset_train, dataset_val,
+                learning_rate=config.LEARNING_RATE / 10,
+                epochs=160,
+                layers='all',
+                augmentation=augmentation)
 
 def color_splash(image, mask):
     """Apply color splash effect.
